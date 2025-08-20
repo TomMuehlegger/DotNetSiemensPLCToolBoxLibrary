@@ -33,6 +33,6 @@ jobs:
       run: dotnet build --configuration Release DotNetSiemensPLCToolBoxLibrary.sln
     - uses: actions/upload-artifact@v4
       with:
-        path: ./**/DotNetProjects.DotNetSiemensPLCToolBoxLibrary*.nupkg
+        path: ./**/TomMuehlegger.DotNetSiemensPLCToolBoxLibrary*.nupkg
     - name: Publish Nuget
-      run: dotnet nuget push "**/DotNetProjects.DotNetSiemensPLCToolBoxLibrary*.nupkg" --api-key ${{secrets.NUGET_API_KEY}} --source https://api.nuget.org/v3/index.json
+      run: dotnet nuget push "**/TomMuehlegger.DotNetSiemensPLCToolBoxLibrary*.nupkg" --api-key ${{secrets.NUGET_API_KEY}} --source https://api.nuget.org/v3/index.json

@@ -7,10 +7,10 @@
   </PropertyGroup>
   <PropertyGroup>
     <DefineConstants>SHARPZIPLIB</DefineConstants>
-    <PackageId>DotNetProjects.DotNetSiemensPLCToolBoxLibrary</PackageId>
+    <PackageId>TomMuehlegger.DotNetSiemensPLCToolBoxLibrary</PackageId>
     <Authors>DotNetProjects</Authors>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
-    <PackageProjectUrl>https://github.com/jogibear9988/DotNetSiemensPLCToolBoxLibrary</PackageProjectUrl>
+    <PackageProjectUrl>https://github.com/TomMuehlegger/DotNetSiemensPLCToolBoxLibrary</PackageProjectUrl>
     <Description>DLL for Accessing S7 PLCs</Description>
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
     <Version>1.0.0</Version>
