@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Reflection;
 using System.Security.Cryptography;
+using System.Windows.Automation;
 
 namespace TiaGitHandler
 {
@@ -56,36 +57,40 @@ namespace TiaGitHandler
             var desiredHash = Convert.ToBase64String(hashBytes);
 
             // 4. Construct the registry subkey path
-            var subKey = $@"SOFTWARE\Siemens\Automation\Openness\{tiaVersion}\Whitelist\{exeName}\Entry";
+            var parseResult = float.TryParse(tiaVersion, out var version);
+            if (!parseResult)
+                throw new ArgumentException($"Invalid TIA version format: {tiaVersion}");
+
+            var subKey = version > 20.0 ? $@"SOFTWARE\Siemens\Automation\Openness\AllowList\{exeName}\Entry" : $@"SOFTWARE\Siemens\Automation\Openness\{tiaVersion}\Whitelist\{exeName}\Entry";
 
             // 5. Open or create the registry key
             using (var entryKey = Registry.LocalMachine.OpenSubKey(subKey, writable: true)
-                                   ?? Registry.LocalMachine.CreateSubKey(subKey, writable: true))
-            {
-                if (entryKey == null)
-                    throw new InvalidOperationException($"Could not create or open registry key: HKLM\\{subKey}");
+                                  ?? Registry.LocalMachine.CreateSubKey(subKey, writable: true))
+                {
+                    if (entryKey == null)
+                        throw new InvalidOperationException($"Could not create or open registry key: HKLM\\{subKey}");
 
-                // 6. Read existing values
-                var currentPath = entryKey.GetValue("Path") as string;
-                var currentDate = entryKey.GetValue("DateModified") as string;
-                var currentHash = entryKey.GetValue("FileHash") as string;
+                    // 6. Read existing values
+                    var currentPath = entryKey.GetValue("Path") as string;
+                    var currentDate = entryKey.GetValue("DateModified") as string;
+                    var currentHash = entryKey.GetValue("FileHash") as string;
 
-                // 7. Check if any value differs
-                var needsUpdate =
-                    currentPath != applicationPath ||
-                    currentDate != desiredDate ||
-                    currentHash != desiredHash;
+                    // 7. Check if any value differs
+                    var needsUpdate =
+                        currentPath != applicationPath ||
+                        currentDate != desiredDate ||
+                        currentHash != desiredHash;
 
-                if (!needsUpdate)
-                    return false;  // already up-to-date
+                    if (!needsUpdate)
+                        return false;  // already up-to-date
 
-                // 8. Write the new values
-                entryKey.SetValue("Path", applicationPath, RegistryValueKind.String);
-                entryKey.SetValue("DateModified", desiredDate, RegistryValueKind.String);
-                entryKey.SetValue("FileHash", desiredHash, RegistryValueKind.String);
+                    // 8. Write the new values
+                    entryKey.SetValue("Path", applicationPath, RegistryValueKind.String);
+                    entryKey.SetValue("DateModified", desiredDate, RegistryValueKind.String);
+                    entryKey.SetValue("FileHash", desiredHash, RegistryValueKind.String);
 
-                return true;
-            }
+                    return true;
+                }
         }
     }
 }
