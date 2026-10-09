@@ -480,7 +480,11 @@ namespace SdaTest
                             if (s7FunctionBlock.KnowHowProtection)
                             {
                                 Console.Error.WriteLine($"Block '{block.BlockName}' is password protected, cannot extract details");
-                                var errorFileItem = new XElement("File", new XAttribute("Protected", "True"));
+                                // Add details about changes (Checksum, CodeChange, InterfaceChange) to detect changes also for PW protected blocks
+                                var errorFileItem = new XElement("File", new XAttribute("Protected", "True"),
+                                    new XAttribute("Checksum", s7FunctionBlock.CheckSum),
+                                    new XAttribute("LastCodeChange", s7FunctionBlock.LastCodeChange),
+                                    new XAttribute("LastInterfaceChange", s7FunctionBlock.LastInterfaceChange));
                                 blockItem.Add(errorFileItem);
                                 rootXml.Add(blockItem);
                                 continue;
@@ -555,7 +559,8 @@ namespace SdaTest
                 catch (Exception ex)
                 {
                     var errorMessage = $"Error when extracting block {block.BlockName}, {block.ParentFolder.Project.ProjectStructure} of type {block.BlockType.ToString()}. (Block is password protected)";
-
+                    Console.Error.WriteLine(ex.StackTrace);
+                    Console.Error.WriteLine(ex.InnerException);
                     AddFailure("blocks", block.BlockName, block.BlockType.ToString(), errorMessage);
                 }
             }
