@@ -463,7 +463,13 @@ namespace SdaTest
 
         private static void AddBlocks(XElement rootXml, BlocksOfflineFolder blocksOfflineFolder)
         {
-            var blocks = blocksOfflineFolder.BlockInfos.Select(blockIt => blockIt.GetBlock());
+            var blocks = blocksOfflineFolder.BlockInfos.Select(blockIt =>
+            {
+                var block = blockIt.GetBlock();
+                // The library caches every converted block; without clearing, large projects run the x86 process out of memory
+                blocksOfflineFolder.ClearBlockCache();
+                return block;
+            });
 
             foreach (var block in blocks)
             {
