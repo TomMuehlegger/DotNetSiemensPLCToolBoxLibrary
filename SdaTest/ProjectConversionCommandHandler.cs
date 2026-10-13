@@ -466,8 +466,9 @@ namespace SdaTest
             var blocks = blocksOfflineFolder.BlockInfos.Select(blockIt =>
             {
                 var block = blockIt.GetBlock();
-                // The library caches every converted block; without clearing, large projects run the x86 process out of memory
-                blocksOfflineFolder.ClearBlockCache();
+                // The library caches every converted block; without clearing, large projects run the x86 process out of memory.
+                // Only this block is cleared, its dependencies stay cached so they are not converted again for every block.
+                blockIt.ClearCachedBlock();
                 return block;
             });
 
