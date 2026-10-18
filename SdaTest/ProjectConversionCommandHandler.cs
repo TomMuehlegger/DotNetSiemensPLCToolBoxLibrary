@@ -14,6 +14,7 @@ using DotNetSiemensPLCToolBoxLibrary.DataTypes.Hardware.Step7V5;
 using DotNetSiemensPLCToolBoxLibrary.DataTypes.Network;
 using DotNetSiemensPLCToolBoxLibrary.DataTypes.Projectfolders;
 using DotNetSiemensPLCToolBoxLibrary.DataTypes.Projectfolders.Step7V5;
+using ICSharpCode.SharpZipLib.Zip;
 using DotNetSiemensPLCToolBoxLibrary.Projectfiles;
 
 namespace SdaTest
@@ -99,6 +100,7 @@ namespace SdaTest
         public static void Export(string projectPath, string outputPath, string? username = null,
             string? password = null)
         {
+            string? extractDir = null;
             try
             {
                 _outputDir = outputPath;
@@ -121,22 +123,56 @@ namespace SdaTest
                     }
                 }
 
-                var project = Projects.LoadProject(projectPath, false, credentials);
-                // Setting the project language here (always use English)
-
-                if (project == null)
-                {
-                    throw new Exception("ERROR: Project file invalid or corrupted. No s7p file found in the project-archive.");
-                }
-
-                project.ProjectLanguage = MnemonicLanguage.English;
-
                 var projectItem = new XElement("ProjectItem",
                     new XAttribute("Name", "Project"),
                     new XAttribute("Type", "Folder"));
 
+                var projects = new List<Project>();
+                var projectEntries = GetZipEntries(projectPath, ".s7p");
+                var libraryEntries = GetZipEntries(projectPath, ".s7l");
+
+                // The library only opens the first .s7p of a zip, so multiprojects and libraries are loaded from an extracted copy
+                if (projectEntries.Count > 1 || libraryEntries.Count > 0)
+                {
+                    extractDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+                    new FastZip().ExtractZip(projectPath, extractDir, null);
+                }
+
                 // Parse the project and create the XML structure and write the XML files to the outputPath
-                AddXmlNodes(projectItem, project.ProjectStructure.SubItems);
+                if (projectEntries.Count > 1)
+                {
+                    // Multiproject: one item per project, on the same level as the libraries
+                    foreach (var projectEntry in projectEntries)
+                    {
+                        projects.Add(AddStep7ProjectItem(projectItem, Path.Combine(extractDir, projectEntry)));
+                    }
+                }
+                else
+                {
+                    var project = Projects.LoadProject(projectPath, false, credentials);
+
+                    if (project == null)
+                    {
+                        throw new Exception("ERROR: Project file invalid or corrupted. No s7p file found in the project-archive.");
+                    }
+
+                    // Setting the project language here (always use English)
+                    project.ProjectLanguage = MnemonicLanguage.English;
+                    FixCpFolders(project);
+                    AddXmlNodes(projectItem, project.ProjectStructure.SubItems);
+                    projects.Add(project);
+                }
+
+                if (libraryEntries.Count > 0)
+                {
+                    var librariesItem = CreateItemElement("Libraries", "Folder");
+                    foreach (var libraryEntry in libraryEntries)
+                    {
+                        AddStep7ProjectItem(librariesItem, Path.Combine(extractDir, libraryEntry));
+                    }
+
+                    projectItem.Add(librariesItem);
+                }
 
                 // Add all interface XMLs
                 foreach (var interfaceXml in _interfacesXmls)
@@ -147,15 +183,15 @@ namespace SdaTest
                 var xmlDocument = new XDocument(new XDeclaration("1.0", "utf-8", "yes"), projectItem);
                 xmlDocument.Save(Path.Combine(outputPath, "project_tree.xml"));
 
-                var stationConfigurations = project.ProjectStructure.SubItems
-                    .FindAll(sc => sc is StationConfigurationFolder)
-                    .ConvertAll(sc => (StationConfigurationFolder)sc);
-                GenerateDeviceConnectionInfo(stationConfigurations);
+                var stationConfigurations = projects
+                    .SelectMany(p => p.ProjectStructure.SubItems.OfType<StationConfigurationFolder>())
+                    .ToList();
+                GenerateDeviceConnectionInfo(stationConfigurations, projects.Count > 1);
                 FailIfAnyErrors();
             }
-            catch
+            finally
             {
-                throw;
+                if (extractDir != null) Directory.Delete(extractDir, true);
             }
         }
 
@@ -334,6 +370,11 @@ namespace SdaTest
             return CreateSdaAttributeListElement(interfaceAttributes, interfaceColumns, title);
         }
 
+        private static XElement GetHardwareList(List<List<string>> properties)
+        {
+            return CreateSdaAttributeListElement(properties, new List<string> { "Property", "Value" }, "Hardware");
+        }
+
         private static void AddStationConfigurationDetails(XElement rootXml,
             StationConfigurationFolder stationConfiguration)
         {
@@ -342,13 +383,20 @@ namespace SdaTest
             // Set the type of the parent item
             rootXml.SetAttributeValue("Type", treeTableType);
 
+            tableRoot.Add(GetHardwareList(new List<List<string>>
+            {
+                new() { "Station Type", stationConfiguration.StationType.ToString() }
+            }));
+
             foreach (var masterSystem in stationConfiguration.MasterSystems)
             {
-                var interfaceColumns = new List<string> { "Type", "Module" };
+                var interfaceColumns = new List<string> { "Type", "Module", "GSD File" };
                 var title = masterSystem.Name + " Interfaces";
                 var interfaceAttributes = (from networkInterface in masterSystem.Children
                                            let type = networkInterface.GetType().Name + " (" + networkInterface.NodeId + ")"
-                                           select new List<string> { type, networkInterface.Name }).ToList();
+                                           // The library keeps the trailing NUL of the GSD file name
+                                           let gsdFile = (networkInterface as ProfibusNode)?.GsdFile.Replace("\0", "")
+                                           select new List<string> { type, networkInterface.Name, gsdFile }).ToList();
                 tableRoot.Add(CreateSdaAttributeListElement(interfaceAttributes, interfaceColumns, title));
             }
 
@@ -358,26 +406,47 @@ namespace SdaTest
 
         private static void AddCpuDetails(XElement rootXml, CPUFolder cpuFolder)
         {
-            if (cpuFolder.NetworkInterfaces == null) return;
             const string treeTableType = "SdaTreeTables";
             var tableRoot = new XElement(treeTableType);
             // Set the type of the parent item
             rootXml.SetAttributeValue("Type", treeTableType);
-            tableRoot.Add(GetNetworkInterfaceList("Network Interfaces", cpuFolder.NetworkInterfaces));
+            tableRoot.Add(GetHardwareList(new List<List<string>>
+            {
+                new() { "CPU Type", cpuFolder.CpuType.ToString() },
+                new() { "Order Number", cpuFolder.MLFB_OrderNumber },
+                new() { "Firmware Version", cpuFolder.FirmwareVersion },
+                new() { "Rack", cpuFolder.Rack.ToString() },
+                new() { "Slot", cpuFolder.Slot.ToString() },
+                new() { "Password Protected", (cpuFolder.PasswdHard != null).ToString() }
+            }));
+            if (cpuFolder.NetworkInterfaces != null)
+            {
+                tableRoot.Add(GetNetworkInterfaceList("Network Interfaces", cpuFolder.NetworkInterfaces));
+            }
             var uniqueCpuName = cpuFolder.StructuredFolderName;
             rootXml.Add(CreateFile(tableRoot, CpuDir, uniqueCpuName, treeTableType));
         }
 
         private static void AddCpDetails(XElement rootXml, CPFolder cpFolder)
         {
-            if (cpFolder.NetworkInterfaces == null) return;
             const string treeTableType = "SdaTreeTables";
             var tableRoot = new XElement(treeTableType);
             // Set the type of the parent item
             rootXml.SetAttributeValue("Type", treeTableType);
 
-            tableRoot.Add(GetNetworkInterfaceList("Network Interfaces", cpFolder.NetworkInterfaces));
-            var uniqueCpName = cpFolder.StructuredFolderName;
+            tableRoot.Add(GetHardwareList(new List<List<string>>
+            {
+                new() { "Rack", cpFolder.Rack.ToString() },
+                new() { "Slot", cpFolder.Slot.ToString() },
+                new() { "Order Number", cpFolder.MLFB_OrderNumber },
+                new() { "Firmware Version", cpFolder.FirmwareVersion }
+            }));
+            if (cpFolder.NetworkInterfaces != null)
+            {
+                tableRoot.Add(GetNetworkInterfaceList("Network Interfaces", cpFolder.NetworkInterfaces));
+            }
+            // A station can contain several CPs with the same name, so rack and slot make the file name unique
+            var uniqueCpName = $"{cpFolder.StructuredFolderName}/{cpFolder.Rack}/{cpFolder.Slot}";
             rootXml.Add(CreateFile(tableRoot, CpDir, uniqueCpName, treeTableType));
         }
 
@@ -664,7 +733,49 @@ namespace SdaTest
             }
         }
 
-        private static void GenerateDeviceConnectionInfo(List<StationConfigurationFolder> stationConfigurations)
+        // Zip entry names always use '/'. The library finds the project folder by the platform separator,
+        // so on Windows a mixed path points it at the wrong folder and the project loads empty.
+        private static List<string> GetZipEntries(string projectPath, string ending)
+        {
+            if (!projectPath.ToLower().EndsWith(".zip")) return new List<string>();
+            using var zipFile = new ZipFile(projectPath);
+            return zipFile.Cast<ZipEntry>()
+                .Select(entry => entry.Name)
+                .Where(name => name.ToLower().EndsWith(ending))
+                .Select(name => name.Replace('/', Path.DirectorySeparatorChar))
+                .ToList();
+        }
+
+        // The library adds CPs to their station without setting the station as parent, and adds a CP twice
+        // when the hardware relation tables link it twice. The parent is needed for a unique CP file name.
+        private static void FixCpFolders(Project project)
+        {
+            foreach (var station in project.ProjectStructure.SubItems.OfType<StationConfigurationFolder>())
+            {
+                var linkedCps = new HashSet<CPFolder>();
+                station.SubItems.RemoveAll(item => item is CPFolder cp && !linkedCps.Add(cp));
+                foreach (var cp in linkedCps)
+                {
+                    cp.Parent = station;
+                }
+            }
+        }
+
+        // Adds a project or library of a multiproject as an item named after the project
+        private static Project AddStep7ProjectItem(XElement rootXml, string projectFile)
+        {
+            var project = Projects.LoadProject(projectFile, false);
+            project.ProjectLanguage = MnemonicLanguage.English;
+            FixCpFolders(project);
+
+            var item = CreateItemElement(project.ProjectName, "item");
+            AddXmlNodes(item, project.ProjectStructure.SubItems);
+            rootXml.Add(item);
+            return project;
+        }
+
+        private static void GenerateDeviceConnectionInfo(List<StationConfigurationFolder> stationConfigurations,
+            bool isMultiproject)
         {
             try
             {
@@ -689,7 +800,10 @@ namespace SdaTest
 
                     deviceInformation.Add(new DeviceInfo
                     {
-                        Name = stationConfiguration.Name,
+                        // Station names are only unique within a project, so multiprojects prefix the project name
+                        Name = isMultiproject
+                            ? $"{stationConfiguration.Project.ProjectName} (:) {stationConfiguration.Name}"
+                            : stationConfiguration.Name,
                         Description = cpu?.Name ?? "Unknown",
                         OrderNumber = cpu?.MLFB_OrderNumber,
                         DeviceType = "plc",
